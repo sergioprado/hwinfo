@@ -3,6 +3,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 void print_cpu_info()
 {
@@ -149,30 +150,57 @@ void print_spi_info()
 
 void print_serial_info()
 {
-    printf("\n== UART Devices ==\n");
+    printf("\n== Physical UART Devices ==\n");
 
     FILE *fp = fopen("/proc/tty/driver/serial", "r");
-    if (!fp) {
-        printf("  Serial info not available.\n");
+    if (fp) {
+        char line[256];
+        int found = 0;
+
+        while (fgets(line, sizeof(line), fp)) {
+            if (strstr(line, "uart:") && !strstr(line, "unknown") &&
+                !strstr(line, "virtual") && !strstr(line, "usb")) {
+                printf("  %s", line);
+                found = 1;
+            }
+        }
+
+        fclose(fp);
+        if (found) return;
+    }
+
+    // Fallback: look in /sys/class/tty/*/device
+    DIR *dir = opendir("/sys/class/tty");
+    if (!dir) {
+        printf("  Unable to open /sys/class/tty\n");
         return;
     }
 
-    char line[256];
+    struct dirent *entry;
     int found = 0;
-    int num = 0, max = 4;
 
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "uart") || strstr(line, "tty")) {
-            printf("  %s", line);
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.')
+            continue;
+
+        // We are mostly interested in ttyS*, but others like ttyAMA*, ttyO*, ttyMXC* are valid too
+        if (strncmp(entry->d_name, "tty", 3) != 0)
+            continue;
+
+        char path[512];
+        snprintf(path, sizeof(path), "/sys/class/tty/%s/device", entry->d_name);
+
+        struct stat st;
+        if (lstat(path, &st) == 0 && S_ISLNK(st.st_mode)) {
+            printf("  /dev/%s\n", entry->d_name);
             found = 1;
-	    if (++num >= max) break;
         }
     }
 
-    if (!found)
-        printf("  No UARTs found.\n");
+    closedir(dir);
 
-    fclose(fp);
+    if (!found)
+        printf("  No physical UARTs found.\n");
 }
 
 void print_input_devices()
